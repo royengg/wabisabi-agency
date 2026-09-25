@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, Moon, PhoneCall, Sun } from "lucide-react";
+import { ArrowUp, ChevronDown, Moon, PhoneCall, Sun } from "lucide-react";
 import { DM_Sans } from "next/font/google";
 import MobileMenu from "./mobile-menu";
 import Link from "next/link";
@@ -10,6 +10,12 @@ import { SOCIALS } from "@/lib/constants";
 import { flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -17,9 +23,11 @@ const dmSans = DM_Sans({
 });
 
 export default function Header() {
-  const [currentTab, setCurrentTab] = useState<NavItem>(NavItem.Services);
   const [isDark, setIsDark] = useState(true);
   const [isThemeTransitioning, setIsThemeTransitioning] = useState(false);
+  const [hoveredServiceHref, setHoveredServiceHref] = useState<string | null>(
+    null,
+  );
   const ref = useRef<HTMLButtonElement | null>(null);
   const themeTransitionRef = useRef(false);
 
@@ -40,60 +48,67 @@ export default function Header() {
   };
 
   const toggleTheme = async () => {
-    const button = ref.current;
-    if (!button || themeTransitionRef.current) return;
-
-    const nextIsDark = !isDark;
+    if (!ref.current || themeTransitionRef.current) return;
 
     const doc = document as Document & {
       startViewTransition?: (cb: () => void) => ViewTransition;
+      activeViewTransition?: ViewTransition | null;
     };
-
-    if (!doc.startViewTransition || doc.visibilityState !== "visible") {
-      applyTheme(nextIsDark);
-      return;
-    }
 
     themeTransitionRef.current = true;
     setIsThemeTransitioning(true);
 
     try {
+      await doc.activeViewTransition?.finished.catch(() => undefined);
+
+      const button = ref.current;
+      if (!button) return;
+
+      const nextIsDark = !doc.documentElement.classList.contains("dark");
+
+      if (!doc.startViewTransition || doc.visibilityState !== "visible") {
+        applyTheme(nextIsDark);
+        return;
+      }
+
+      let themeApplied = false;
       const transition = doc.startViewTransition(() => {
         flushSync(() => {
           applyTheme(nextIsDark);
+          themeApplied = true;
         });
       });
 
-      await transition.ready;
+      try {
+        await transition.ready;
 
-      const { top, left } = button.getBoundingClientRect();
-      const x = left;
-      const y = top;
-      const right = window.innerWidth - left;
-      const bottom = window.innerHeight - top;
+        const { top, left, width, height } = button.getBoundingClientRect();
+        const x = left + width / 2;
+        const y = top + height / 2;
+        const maxRadius = Math.hypot(
+          Math.max(x, window.innerWidth - x),
+          Math.max(y, window.innerHeight - y),
+        );
 
-      const maxRadius = Math.hypot(
-        Math.max(left, right),
-        Math.max(top, bottom),
-      );
+        const reveal = doc.documentElement.animate(
+          {
+            clipPath: [
+              `circle(0px at ${x}px ${y}px)`,
+              `circle(${maxRadius}px at ${x}px ${y}px)`,
+            ],
+          },
+          {
+            duration: 700,
+            easing: "ease-in-out",
+            pseudoElement: "::view-transition-new(root)",
+          },
+        );
 
-      document.documentElement.animate(
-        {
-          clipPath: [
-            `circle(0px at ${x}px ${y}px)`,
-            `circle(${maxRadius}px at ${x}px ${y}px)`,
-          ],
-        },
-        {
-          duration: 700,
-          easing: "ease-in-out",
-          pseudoElement: "::view-transition-new(root)",
-        },
-      );
-
-      await transition.finished;
-    } catch {
-      applyTheme(nextIsDark);
+        await Promise.allSettled([reveal.finished, transition.finished]);
+      } catch {
+        await transition.updateCallbackDone.catch(() => undefined);
+        if (!themeApplied) applyTheme(nextIsDark);
+      }
     } finally {
       themeTransitionRef.current = false;
       setIsThemeTransitioning(false);
@@ -101,11 +116,7 @@ export default function Header() {
   };
 
   const pathname = usePathname();
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    setCurrentTab(pathname as NavItem);
-  }, [pathname]);
+  const servicesActive = pathname.startsWith("/services/");
 
   return (
     <header
@@ -124,18 +135,73 @@ export default function Header() {
 
       <nav className="mt-1 lg:mt-4">
         <ul className="flex items-center gap-2 text-2xl sm:gap-3 lg:gap-10">
+          <li className="relative hidden lg:block">
+            <DropdownMenu
+              onOpenChange={(open) => {
+                if (!open) setHoveredServiceHref(null);
+              }}
+            >
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    "group dark:hover:text-foreground/80 relative flex cursor-pointer items-center gap-2 px-1 py-1 outline-none hover:text-gray-900",
+                    servicesActive
+                      ? "text-foreground font-medium"
+                      : "text-gray-700 dark:text-white",
+                  )}
+                >
+                  Services
+                  <ChevronDown className="size-5 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                  {servicesActive && (
+                    <motion.div
+                      layoutId="nav-indicator"
+                      className="bg-foreground absolute -bottom-1 left-0 h-0.5 w-full rounded-full"
+                      transition={{
+                        type: "spring",
+                        stiffness: 380,
+                        damping: 30,
+                      }}
+                    />
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                sideOffset={8}
+                className="dark:text-foreground w-[192px] min-w-0 border-0 bg-[#FBFBFB] p-2 text-[#77413A] shadow-sm dark:bg-[#292828]"
+              >
+                {serviceNavItems.map((item) => (
+                  <DropdownMenuItem
+                    key={item.href}
+                    asChild
+                    onPointerEnter={() => setHoveredServiceHref(item.href)}
+                    onPointerLeave={() => setHoveredServiceHref(null)}
+                    className={cn(
+                      "dark:focus:text-foreground cursor-pointer rounded px-2.5 py-1.5 text-xs whitespace-nowrap focus:bg-[#EBEBEB] focus:text-[#77413A] dark:focus:bg-white/10",
+                      pathname === item.href &&
+                        hoveredServiceHref === null &&
+                        "bg-[#EBEBEB] dark:bg-white/10",
+                    )}
+                  >
+                    <Link href={item.href}>{item.name}</Link>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </li>
           {navItems.map((item) => (
             <li key={item.name} className="relative hidden lg:block">
               <Link
                 href={item.href}
                 className={`${
-                  currentTab === item.href
+                  pathname === item.href
                     ? "font-medium"
                     : "text-gray-700 dark:text-white"
                 } dark:hover:text-foreground/80 relative px-1 py-1 hover:text-gray-900`}
               >
                 {item.name}
-                {currentTab === item.href && (
+                {pathname === item.href && (
                   <motion.div
                     layoutId="nav-indicator"
                     className="bg-foreground absolute -bottom-1 left-0 h-0.5 w-full rounded-full"
@@ -147,9 +213,9 @@ export default function Header() {
           ))}
           <div className="flex items-center gap-2">
             <Link href={SOCIALS.discord}>
-              <button className="group flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border-2 px-2.5 py-1.5 text-[10px] min-[360px]:text-xs sm:px-4 sm:py-2 lg:py-1 lg:text-xl dark:border-white dark:text-white">
+              <button className="group flex cursor-pointer items-center gap-1 rounded-full border-2 px-2.5 py-1.5 text-[10px] whitespace-nowrap min-[360px]:text-xs sm:px-4 sm:py-2 lg:py-1 lg:text-xl dark:border-white dark:text-white">
                 <span>Purchase Plan</span>
-                <ArrowUp className="size-4 min-[360px]:size-5 rotate-45 transition-all group-hover:rotate-90" />
+                <ArrowUp className="size-4 rotate-45 transition-all group-hover:rotate-90 min-[360px]:size-5" />
               </button>
             </Link>
             <Link href="/contact">
@@ -186,10 +252,6 @@ export default function Header() {
 
 const navItems = [
   {
-    name: "Services",
-    href: "/services",
-  },
-  {
     name: "Works",
     href: "/works",
   },
@@ -199,8 +261,13 @@ const navItems = [
   },
 ];
 
-enum NavItem {
-  Services = "/services",
-  Works = "/works",
-  Feedbacks = "/feedbacks",
-}
+const serviceNavItems = [
+  {
+    name: "Design",
+    href: "/services/design",
+  },
+  {
+    name: "Web Development",
+    href: "/services/web-development",
+  },
+];
